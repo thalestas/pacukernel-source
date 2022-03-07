@@ -4239,7 +4239,7 @@ _iscan_sysioc_thread(void *data)
 		 }
 	}
 	printf("%s: was terminated\n", __FUNCTION__);
-	complete_and_exit(&iscan->sysioc_exited, 0);
+	kthread_complete_and_exit(&iscan->sysioc_exited, 0);
 }
 
 void wl_iw_down(dhd_pub_t *dhdp)

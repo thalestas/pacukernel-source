@@ -6347,7 +6347,7 @@ dhd_watchdog_thread(void *data)
 		}
 	}
 
-	complete_and_exit(&tsk->completed, 0);
+	kthread_complete_and_exit(&tsk->completed, 0);
 }
 
 static void dhd_watchdog(
@@ -6439,7 +6439,7 @@ dhd_rpm_state_thread(void *data)
 		}
 	}
 
-	complete_and_exit(&tsk->completed, 0);
+	kthread_complete_and_exit(&tsk->completed, 0);
 }
 
 static void dhd_runtimepm(
@@ -6588,7 +6588,7 @@ dhd_dpc_thread(void *data)
 			break;
 		}
 	}
-	complete_and_exit(&tsk->completed, 0);
+	kthread_complete_and_exit(&tsk->completed, 0);
 }
 
 static int
@@ -6671,7 +6671,7 @@ dhd_rxf_thread(void *data)
 			break;
 		}
 	}
-	complete_and_exit(&tsk->completed, 0);
+	kthread_complete_and_exit(&tsk->completed, 0);
 }
 
 #ifdef BCMPCIE

@@ -401,7 +401,7 @@ fail:
 		}
 	}
 	printf("%s: was terminated\n", __FUNCTION__);
-	complete_and_exit(&tsk->completed, 0);
+	kthread_complete_and_exit(&tsk->completed, 0);
 	return 0;
 }
 
