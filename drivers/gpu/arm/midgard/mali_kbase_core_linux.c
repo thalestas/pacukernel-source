@@ -66,6 +66,7 @@
 #include <linux/errno.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/miscdevice.h>
 #include <linux/list.h>
@@ -191,6 +192,14 @@ static struct kbase_device *to_kbase_device(struct device *dev)
 {
 	return dev_get_drvdata(dev);
 }
+/*
+ * Number of IRQ resources supported by the MALI
+ */
+#define MALI_IRQS_NUM	3
+
+static const char * const irq_names[MALI_IRQS_NUM] = {
+	"job", "mmu", "gpu",
+};
 
 static int assign_irqs(struct platform_device *pdev)
 {
@@ -201,33 +210,50 @@ static int assign_irqs(struct platform_device *pdev)
 		return -ENODEV;
 
 	/* 3 IRQ resources */
-	for (i = 0; i < 3; i++) {
-		struct resource *irq_res;
-		int irqtag;
+	for (i = 0; i < MALI_IRQS_NUM; i++) {
+		int irqtag, irqflags;
+		const char *irq_name;
+		int irq_start;
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0))
+		int irq;
+		irq = platform_get_irq_byname(pdev, irq_names[i]);
+		if (irq <= 0) {
+			dev_err(kbdev->dev, "No IRQ defined as %s\n", irq_names[i]);
+			return -ENOENT;
+		}
+		irq_start = irq;
+		irq_name = irq_names[i];
+		irqflags = irq_get_trigger_type(irq);
+#else
+		struct resource *irq_res;
 		irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, i);
 		if (!irq_res) {
 			dev_err(kbdev->dev, "No IRQ resource at index %d\n", i);
 			return -ENOENT;
 		}
+		irq_start = irq_res->start;
+		irq_name = irq_res->name;
+		irqflags = irq_res->flags & IRQF_TRIGGER_MASK;
+#endif
 
 #ifdef CONFIG_OF
-		if (!strncmp(irq_res->name, "job", 4)) {
+		if (!strncmp(irq_name, "job", 4)) {
 			irqtag = JOB_IRQ_TAG;
-		} else if (!strncmp(irq_res->name, "mmu", 4)) {
+		} else if (!strncmp(irq_name, "mmu", 4)) {
 			irqtag = MMU_IRQ_TAG;
-		} else if (!strncmp(irq_res->name, "gpu", 4)) {
+		} else if (!strncmp(irq_name, "gpu", 4)) {
 			irqtag = GPU_IRQ_TAG;
 		} else {
 			dev_err(&pdev->dev, "Invalid irq res name: '%s'\n",
-				irq_res->name);
+				irq_name);
 			return -EINVAL;
 		}
 #else
 		irqtag = i;
 #endif /* CONFIG_OF */
-		kbdev->irqs[irqtag].irq = irq_res->start;
-		kbdev->irqs[irqtag].flags = irq_res->flags & IRQF_TRIGGER_MASK;
+		kbdev->irqs[irqtag].irq = irq_start;
+		kbdev->irqs[irqtag].flags = irqflags;
 	}
 
 	return 0;
