@@ -474,7 +474,7 @@ static int nanohub_spi_probe(struct spi_device *spi)
 	return 0;
 }
 
-static int nanohub_spi_remove(struct spi_device *spi)
+static void nanohub_spi_remove(struct spi_device *spi)
 {
 	struct nanohub_spi_data *spi_data;
 	struct iio_dev *iio_dev;
@@ -487,7 +487,7 @@ static int nanohub_spi_remove(struct spi_device *spi)
 		gpio_free(spi_data->cs);
 	}
 
-	return nanohub_remove(iio_dev);
+	nanohub_remove(iio_dev);
 }
 
 static int nanohub_spi_suspend(struct device *dev)
