@@ -232,34 +232,17 @@ kbase_dma_fence_add_reservation_callback(struct kbase_jd_atom *katom,
 	struct fence *excl_fence = NULL;
 	struct fence **shared_fences = NULL;
 #else
-	struct dma_fence *excl_fence = NULL;
 	struct dma_fence **shared_fences = NULL;
 #endif
 	unsigned int shared_count = 0;
 	int err, i;
 
 	err = dma_resv_get_fences(resv,
-						&excl_fence,
-						&shared_count,
-						&shared_fences);
+		exclusive ? DMA_RESV_USAGE_WRITE : DMA_RESV_USAGE_KERNEL,
+		&shared_count,
+		&shared_fences);
 	if (err)
 		return err;
-
-	if (excl_fence) {
-		err = kbase_fence_add_callback(katom,
-						excl_fence,
-						kbase_dma_fence_cb);
-
-		/* Release our reference, taken by dma_resv_get_fences(),
-		 * to the fence. We have set up our callback (if that was possible),
-		 * and it's the fence's owner is responsible for singling the fence
-		 * before allowing it to disappear.
-		 */
-		dma_fence_put(excl_fence);
-
-		if (err)
-			goto out;
-	}
 
 	if (exclusive) {
 		for (i = 0; i < shared_count; i++) {
@@ -346,32 +329,22 @@ int kbase_dma_fence_wait(struct kbase_jd_atom *katom,
 	for (i = 0; i < info->dma_fence_resv_count; i++) {
 		struct dma_resv *obj = info->resv_objs[i];
 
-		if (!test_bit(i, info->dma_fence_excl_bitmap)) {
-			err = dma_resv_reserve_shared(obj, 1);
-			if (err) {
-				dev_err(katom->kctx->kbdev->dev,
-					"Error %d reserving space for shared fence.\n", err);
-				goto end;
-			}
-
-			err = kbase_dma_fence_add_reservation_callback(katom, obj, false);
-			if (err) {
-				dev_err(katom->kctx->kbdev->dev,
-					"Error %d adding reservation to callback.\n", err);
-				goto end;
-			}
-
-			dma_resv_add_shared_fence(obj, fence);
-		} else {
-			err = kbase_dma_fence_add_reservation_callback(katom, obj, true);
-			if (err) {
-				dev_err(katom->kctx->kbdev->dev,
-					"Error %d adding reservation to callback.\n", err);
-				goto end;
-			}
-
-			dma_resv_add_excl_fence(obj, fence);
+		bool exclusive = test_bit(i, info->dma_fence_excl_bitmap);
+		err = dma_resv_reserve_fences(obj, 1);
+		if (err) {
+			dev_err(katom->kctx->kbdev->dev,
+				"Error %d reserving space for shared fence.\n", err);
+			goto end;
 		}
+
+		err = kbase_dma_fence_add_reservation_callback(katom, obj, exclusive);
+		if (err) {
+			dev_err(katom->kctx->kbdev->dev,
+				"Error %d adding reservation to callback.\n", err);
+			goto end;
+		}
+
+		dma_resv_add_fence(obj, fence, exclusive ? DMA_RESV_USAGE_WRITE : DMA_RESV_USAGE_KERNEL);
 	}
 
 end:
