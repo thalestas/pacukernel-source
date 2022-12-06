@@ -55,64 +55,28 @@
  * Return: true if gap_end is now aligned correctly and is still in range,
  *         false otherwise
  */
-static bool align_and_check(unsigned long *gap_end, unsigned long gap_start,
-		struct vm_unmapped_area_info *info, bool is_shader_code,
-		bool is_same_4gb_page)
-{
-	/* Compute highest gap address at the desired alignment */
-	(*gap_end) -= info->length;
-	(*gap_end) -= (*gap_end - info->align_offset) & info->align_mask;
-
-	if (is_shader_code) {
-		/* Check for 4GB boundary */
-		if (0 == (*gap_end & BASE_MEM_MASK_4GB))
-			(*gap_end) -= (info->align_offset ? info->align_offset :
-					info->length);
-		if (0 == ((*gap_end + info->length) & BASE_MEM_MASK_4GB))
-			(*gap_end) -= (info->align_offset ? info->align_offset :
-					info->length);
-
-		if (!(*gap_end & BASE_MEM_MASK_4GB) || !((*gap_end +
-				info->length) & BASE_MEM_MASK_4GB))
-			return false;
-	} else if (is_same_4gb_page) {
-		unsigned long start = *gap_end;
-		unsigned long end = *gap_end + info->length;
-		unsigned long mask = ~((unsigned long)U32_MAX);
-
-		/* Check if 4GB boundary is straddled */
-		if ((start & mask) != ((end - 1) & mask)) {
-			unsigned long offset = end - (end & mask);
-			/* This is to ensure that alignment doesn't get
-			 * disturbed in an attempt to prevent straddling at
-			 * 4GB boundary. The GPU VA is aligned to 2MB when the
-			 * allocation size is > 2MB and there is enough CPU &
-			 * GPU virtual space.
-			 */
-			unsigned long rounded_offset =
-					ALIGN(offset, info->align_mask + 1);
-
-			start -= rounded_offset;
-			end -= rounded_offset;
-
-			*gap_end = start;
-
-			/* The preceding 4GB boundary shall not get straddled,
-			 * even after accounting for the alignment, as the
-			 * size of allocation is limited to 4GB and the initial
-			 * start location was already aligned.
-			 */
-			WARN_ON((start & mask) != ((end - 1) & mask));
-		}
-	}
-
-
-	if ((*gap_end < info->low_limit) || (*gap_end < gap_start))
-		return false;
-
-
-	return true;
-}
+// static bool align_and_check(unsigned long *gap_end, unsigned long gap_start,
+// 		struct vm_unmapped_area_info *info, bool is_shader_code)
+// {
+// 	/* Compute highest gap address at the desired alignment */
+// 	(*gap_end) -= info->length;
+// 	(*gap_end) -= (*gap_end - info->align_offset) & info->align_mask;
+// 	if (is_shader_code) {
+// 		/* Check for 4GB boundary */
+// 		if (0 == (*gap_end & BASE_MEM_MASK_4GB))
+// 			(*gap_end) -= (info->align_offset ? info->align_offset :
+// 					info->length);
+// 		if (0 == ((*gap_end + info->length) & BASE_MEM_MASK_4GB))
+// 			(*gap_end) -= (info->align_offset ? info->align_offset :
+// 					info->length);
+// 		if (!(*gap_end & BASE_MEM_MASK_4GB) || !((*gap_end +
+// 				info->length) & BASE_MEM_MASK_4GB))
+// 			return false;
+// 	}
+// 	if ((*gap_end < info->low_limit) || (*gap_end < gap_start))
+// 		return false;
+// 	return true;
+// }
 
 /**
  * kbase_unmapped_area_topdown() - allocates new areas top-down from
@@ -152,100 +116,24 @@ static bool align_and_check(unsigned long *gap_end, unsigned long gap_start,
 static unsigned long kbase_unmapped_area_topdown(struct vm_unmapped_area_info
 		*info, bool is_shader_code, bool is_same_4gb_page)
 {
-	struct mm_struct *mm = current->mm;
-	struct vm_area_struct *vma;
-	unsigned long length, low_limit, high_limit, gap_start, gap_end;
+	unsigned long length, gap;
 
+	MA_STATE(mas, &current->mm->mm_mt, 0, 0);
 	/* Adjust search length to account for worst case alignment overhead */
 	length = info->length + info->align_mask;
 	if (length < info->length)
 		return -ENOMEM;
 
-	/*
-	 * Adjust search limits by the desired length.
-	 * See implementation comment at top of unmapped_area().
-	 */
-	gap_end = info->high_limit;
-	if (gap_end < length)
-		return -ENOMEM;
-	high_limit = gap_end - length;
-
-	if (info->low_limit > high_limit)
-		return -ENOMEM;
-	low_limit = info->low_limit + length;
-
-	/* Check highest gap, which does not precede any rbtree node */
-	gap_start = mm->highest_vm_end;
-	if (gap_start <= high_limit) {
-		if (align_and_check(&gap_end, gap_start, info,
-				is_shader_code, is_same_4gb_page))
-			return gap_end;
-	}
-
-	/* Check if rbtree root looks promising */
-	if (RB_EMPTY_ROOT(&mm->mm_rb))
-		return -ENOMEM;
-	vma = rb_entry(mm->mm_rb.rb_node, struct vm_area_struct, vm_rb);
-	if (vma->rb_subtree_gap < length)
+	if (mas_empty_area_rev(&mas, info->low_limit, info->high_limit - 1,
+				length))
 		return -ENOMEM;
 
-	while (true) {
-		/* Visit right subtree if it looks promising */
-		gap_start = vma->vm_prev ? vma->vm_prev->vm_end : 0;
-		if (gap_start <= high_limit && vma->vm_rb.rb_right) {
-			struct vm_area_struct *right =
-				rb_entry(vma->vm_rb.rb_right,
-					 struct vm_area_struct, vm_rb);
-			if (right->rb_subtree_gap >= length) {
-				vma = right;
-				continue;
-			}
-		}
-
-check_current:
-		/* Check if current node has a suitable gap */
-		gap_end = vma->vm_start;
-		if (gap_end < low_limit)
-			return -ENOMEM;
-		if (gap_start <= high_limit && gap_end - gap_start >= length) {
-			/* We found a suitable gap. Clip it with the original
-			 * high_limit. */
-			if (gap_end > info->high_limit)
-				gap_end = info->high_limit;
-
-			if (align_and_check(&gap_end, gap_start, info,
-					is_shader_code, is_same_4gb_page))
-				return gap_end;
-		}
-
-		/* Visit left subtree if it looks promising */
-		if (vma->vm_rb.rb_left) {
-			struct vm_area_struct *left =
-				rb_entry(vma->vm_rb.rb_left,
-					 struct vm_area_struct, vm_rb);
-			if (left->rb_subtree_gap >= length) {
-				vma = left;
-				continue;
-			}
-		}
-
-		/* Go back up the rbtree to find next candidate node */
-		while (true) {
-			struct rb_node *prev = &vma->vm_rb;
-
-			if (!rb_parent(prev))
-				return -ENOMEM;
-			vma = rb_entry(rb_parent(prev),
-				       struct vm_area_struct, vm_rb);
-			if (prev == vma->vm_rb.rb_right) {
-				gap_start = vma->vm_prev ?
-					vma->vm_prev->vm_end : 0;
-				goto check_current;
-			}
-		}
-	}
-
-	return -ENOMEM;
+	gap = mas.last + 1 - info->length;
+	gap -= (gap - info->align_offset) & info->align_mask;
+//	if (align_and_check(&gap_end, gap_start, info, is_shader_code))
+//		return gap_end;
+//	return -ENOMEM;
+	return gap;
 }
 
 
