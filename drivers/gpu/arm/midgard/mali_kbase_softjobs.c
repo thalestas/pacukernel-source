@@ -793,7 +793,7 @@ int kbase_mem_copy_from_extres(struct kbase_context *kctx,
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
 		void *dma_kernel;
 #else
-		struct dma_buf_map map;
+		struct iosys_map map;
 #endif
 
 		KBASE_DEBUG_ASSERT(dma_buf != NULL);
